@@ -131,14 +131,28 @@ async def sse(task_id: str):
         raise HTTPException(404, f"Task {task_id} not found")
 
     async def event_stream() -> AsyncGenerator[str, None]:
+        result_stream = f"llm:result:stream:{task_id}"
         channel = f"{RESULT_PREFIX}{task_id}"
         pubsub  = redis.pubsub()
         await pubsub.subscribe(channel)
 
-        silence = 0.0
-        poll    = 0.05   # 50ms poll interval
-
         try:
+            # First replay any tokens already in the result stream
+            existing = await redis.xrange(result_stream)
+            for _, fields in existing:
+                payload = {
+                    k.decode() if isinstance(k, bytes) else k:
+                    v.decode() if isinstance(v, bytes) else v
+                    for k, v in fields.items()
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+                if payload.get("type") in ("done", "error"):
+                    return
+
+            # Then listen on pub/sub for tokens still in flight
+            silence = 0.0
+            poll    = 0.05
+
             while silence < SSE_TIMEOUT:
                 msg = await pubsub.get_message(
                     ignore_subscribe_messages=True,

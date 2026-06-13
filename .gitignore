@@ -17,3 +17,6 @@ node_modules/
 # Secrets
 *.env*
 !.env.example
+
+# Custom
+Handoff.md

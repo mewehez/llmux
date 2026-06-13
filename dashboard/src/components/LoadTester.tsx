@@ -1,5 +1,5 @@
 import { useState, useRef } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -179,7 +179,6 @@ export function LoadTester() {
 
   const done      = tasks.filter(t => t.status === "done").length
   const streaming = tasks.filter(t => t.status === "streaming").length
-  const errors    = tasks.filter(t => t.status === "error").length
   const avgElapsed = tasks
     .filter(t => t.elapsed != null)
     .map(t => t.elapsed!)

@@ -34,7 +34,9 @@ services:
       start_period: 10s
   
   dashboard:
-    build: ./dashboard
+    build: 
+      context: ./dashboard
+      target: dev
     ports:
       - "5173:5173"
     volumes:

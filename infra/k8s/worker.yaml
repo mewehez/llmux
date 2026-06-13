@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-135m
+spec:
+  selector:
+    matchLabels:
+      app: worker-135m
+  template:
+    metadata:
+      labels:
+        app: worker-135m
+    spec:
+      containers:
+      - name: worker-135m
+        image: llm-server-worker:k8s
+        imagePullPolicy: Never
+        env: 
+          - name: REDIS_URL
+            value: redis://redis:6379/0
+          - name: STREAM
+            value: llm:work:135m
+          - name: LLM_URL
+            value: http://llm-135m:8080
+          - name: CONSUMER_GROUP
+            value: llm-workers-135m
+        readinessProbe:
+          exec:
+            command: ["cat", "/proc/1/cmdline"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command: ["cat", "/proc/1/cmdline"]
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-360m
+spec:
+  selector:
+    matchLabels:
+      app: worker-360m
+  template:
+    metadata:
+      labels:
+        app: worker-360m
+    spec:
+      containers:
+      - name: worker-360m
+        image: llm-server-worker:k8s
+        imagePullPolicy: Never
+        env: 
+          - name: REDIS_URL
+            value: redis://redis:6379/0
+          - name: STREAM
+            value: llm:work:360m
+          - name: LLM_URL
+            value: http://llm-360m:8080
+          - name: CONSUMER_GROUP
+            value: llm-workers-360m
+        readinessProbe:
+          exec:
+            command: ["cat", "/proc/1/cmdline"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command: ["cat", "/proc/1/cmdline"]
+          initialDelaySeconds: 10
+          periodSeconds: 10

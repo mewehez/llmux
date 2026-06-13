@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-360m-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-360m
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-360m
+  template:
+    metadata:
+      labels:
+        app: llm-360m
+    spec:
+      initContainers:
+        - name: model-downloader
+          image: alpine:3.19
+          command: 
+            - sh
+            - -c
+            - |
+              if [ -f /models/SmolLM2-360M-Instruct-Q4_K_M.gguf ]; then
+                echo "Model already exists, skipping download."
+              else
+                echo "Downloading SmolLM2-360M..." &&
+                wget -q -O /models/SmolLM2-360M-Instruct-Q4_K_M.gguf \
+                  https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf &&
+                echo "Download complete."
+              fi
+          volumeMounts:
+            - name: models-360m
+              mountPath: /models
+      
+      containers:
+        - name: llm-360m
+          image: ghcr.io/ggml-org/llama.cpp:server
+          args:
+            - --model
+            - /models/SmolLM2-360M-Instruct-Q4_K_M.gguf
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --ctx-size
+            - "2048"
+            - --threads
+            - "4"
+            - --parallel
+            - "4"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: models-360m
+              mountPath: /models
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+    
+      volumes:
+        - name: models-360m
+          persistentVolumeClaim:
+            claimName: models-360m-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-360m
+spec:
+  selector:
+    app: llm-360m
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30003
+  type: NodePort
+

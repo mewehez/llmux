@@ -20,6 +20,7 @@ CONSUMER_GROUP = os.getenv("CONSUMER_GROUP", "llm-workers")
 WORKER_ID      = os.getenv("WORKER_ID",      socket.gethostname())
 BLOCK_MS       = int(os.getenv("BLOCK_MS",   "2000"))
 RESULT_PREFIX  = "llm:result:"
+RESULT_STREAM_PREFIX = "llm:result:stream:"
 
 # ── Redis ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ async def stream_inference(message: str, task_id: str, redis: aioredis.Redis) ->
     Publishes: token events, then a final done or error event.
     """
     channel = f"{RESULT_PREFIX}{task_id}"
+    result_stream = f"{RESULT_STREAM_PREFIX}{task_id}"
 
     payload = {
         "model":    "local-model",
@@ -96,23 +98,34 @@ async def stream_inference(message: str, task_id: str, redis: aioredis.Redis) ->
                     )
 
                     if delta:
+                        await redis.xadd(
+                            result_stream,
+                            {"type": "token", "content": delta},
+                            maxlen=1000,
+                        )
                         await redis.publish(
                             channel,
                             json.dumps({"type": "token", "content": delta}),
                         )
 
+        await redis.xadd(result_stream, {"type": "done", "task_id": task_id})
         await redis.publish(
             channel,
             json.dumps({"type": "done", "task_id": task_id}),
         )
         logger.info("Task %s completed", task_id)
+        # Set TTL on the result stream
+        await redis.expire(result_stream, 300)  # 5 minutes
 
     except Exception as exc:
         logger.error("Task %s failed: %s", task_id, exc)
+        await redis.xadd(result_stream, {"type": "error", "content": str(exc), "task_id": task_id})
         await redis.publish(
             channel,
             json.dumps({"type": "error", "content": str(exc), "task_id": task_id}),
         )
+        # Set TTL on the result stream
+        await redis.expire(result_stream, 300)  # 5 minutes
         raise
 
 
