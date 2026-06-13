@@ -193,3 +193,67 @@ async def task_status(task_id: str):
         v.decode() if isinstance(v, bytes) else v
         for k, v in meta.items()
     }
+
+
+@app.get("/workers/status")
+async def workers_status():
+    redis = await get_redis()
+
+    statuses = []
+    for model, stream in STREAM_MAP.items():
+        # Counts only entries not yet delivered to the consumer group
+        try:
+            group_info = await redis.xinfo_groups(stream)
+            group_data = next(
+                (g for g in group_info if g["name"].decode() == group),
+                None,
+            )
+            queue_depth = group_data["lag"] if group_data else 0
+        except Exception:
+            queue_depth = 0
+
+        # Pending entries — consumed but not yet ACKed
+        group = f"llm-workers-{model}"
+        try:
+            pending = await redis.xpending(stream, group)
+            pending_count = pending["pending"]
+        except Exception:
+            pending_count = 0
+
+        # Last entry delivered to the consumer group
+        try:
+            group_info = await redis.xinfo_groups(stream)
+            group_data = next(
+                (g for g in group_info if g["name"].decode() == group),
+                None,
+            )
+            last_delivered_id = group_data["last-delivered-id"].decode() if group_data else None
+            if last_delivered_id and last_delivered_id != "0-0":
+                last_entries = await redis.xrange(
+                    stream,
+                    min=last_delivered_id,
+                    max=last_delivered_id,
+                )
+            else:
+                last_entries = []
+        except Exception:
+            last_entries = []
+
+        last_task = None
+        if last_entries:
+            fields = last_entries[0][1]
+            last_task = {
+                "task_id": fields.get(b"task_id", b"").decode(),
+                "message": fields.get(b"message", b"").decode(),
+            }
+
+        statuses.append({
+            "model":         model,
+            "stream":        stream,
+            "queue_depth":   queue_depth,
+            "pending":       pending_count,
+            "last_task":     last_task,
+            "llm_url":       f"http://llm-{model}:8080",
+        })
+
+    return {"workers": statuses}
