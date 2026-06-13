@@ -1,0 +1,11 @@
+[project]
+name = "llm-server-worker"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "redis>=8.0.0",
+]
