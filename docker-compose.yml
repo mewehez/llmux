@@ -33,6 +33,19 @@ services:
       retries: 5
       start_period: 10s
   
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./dashboard:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      api:
+        condition: service_healthy
+  
   llm-135m:
     image: ghcr.io/ggml-org/llama.cpp:server
     ports:
