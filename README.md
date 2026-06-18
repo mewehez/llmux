@@ -8,6 +8,8 @@
 
 > **Observable, autoscaling multi-model LLM serving on llama.cpp + Redis Streams, with SSE token streaming and a live React dashboard. Runs on Docker Compose and Kubernetes (kind) via KEDA + Helm.**
 
+![llmux — a tour of the dashboard tabs](docs/dashboard-tour.gif)
+
 `llmux` serves multiple LLMs behind one API, streams tokens to the browser as they're generated, and shows in real time what every model and worker is doing. A durable Redis Streams work queue decouples a stateless API from stateless workers that drive RAM-bound llama.cpp pods — and **two independent autoscalers** (cheap workers, expensive model pods) scale each tier on queue lag. The entire model set, app wiring, and infrastructure are generated from **one registry file**.
 
 ---
