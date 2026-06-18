@@ -37,5 +37,6 @@ helm uninstall llm-server -n llm-server                             # remove (ke
 Tunables live in `values.yaml` (images, redis storage, proxy nodePort,
 `keda.enabled`, and per-field `defaults` used when a model omits something).
 
-> The hand-written manifests in `infra/k8s/*.yaml` are **superseded** by this
-> chart (kept only for `kind-config.yaml` and legacy cleanup in `stop-k8s.sh`).
+> This chart **replaces** the former hand-written `infra/k8s/*.yaml` manifests,
+> which have been removed. Only `infra/k8s/kind-config.yaml` remains (it defines
+> the kind cluster + host→cluster port mappings, used by `deploy-k8s.sh`).

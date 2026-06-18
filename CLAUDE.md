@@ -69,7 +69,7 @@ kubectl config use-context kind-llm-server
 ./infra/scripts/stop-k8s.sh --cluster  # nuke entire cluster
 ```
 Port mappings (host → cluster): `30000` API, `30001` Dashboard, `30002` llm-135m, `30003` llm-360m.
-k8s is deployed via a **Helm chart** (`infra/helm/llm-server/`) that generates all resources from `config/models.json`. Shared resources (redis, api, dashboard, proxy, benchmark-runner, secret, `llm-models` ConfigMap) render once; per **enabled** model it renders a PVC, the llama.cpp Deployment (init container downloads the GGUF from `model_url`) + slots sidecar + Service, a worker Deployment, and KEDA ScaledObjects. `deploy-k8s.sh` copies `config/models.json` into the chart (`.Files`), installs KEDA, and runs `helm upgrade --install` (which prunes models you set `enabled:false`). The legacy hand-written `infra/k8s/*.yaml` are superseded (kept only for `kind-config.yaml` + `stop-k8s.sh` migration cleanup).
+k8s is deployed via a **Helm chart** (`infra/helm/llm-server/`) that generates all resources from `config/models.json`. Shared resources (redis, api, dashboard, proxy, benchmark-runner, secret, `llm-models` ConfigMap) render once; per **enabled** model it renders a PVC, the llama.cpp Deployment (init container downloads the GGUF from `model_url`) + slots sidecar + Service, a worker Deployment, and KEDA ScaledObjects. `deploy-k8s.sh` copies `config/models.json` into the chart (`.Files`), installs KEDA, and runs `helm upgrade --install` (which prunes models you set `enabled:false`). Only `infra/k8s/kind-config.yaml` remains (it defines the kind cluster + host→cluster port mappings, used by `deploy-k8s.sh`); the former hand-written manifests were removed in favor of the chart.
 
 ## Key conventions
 

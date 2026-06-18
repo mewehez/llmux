@@ -47,18 +47,6 @@ else
   log "No Helm release '${RELEASE}' found."
 fi
 
-# ── One-time legacy cleanup (pre-Helm kubectl deploys) ────────────────────────
-# Deletes old resources by NAME but NEVER PVCs. (The old llm-*/redis manifests
-# bundled the PVC with the Deployment, so `kubectl delete -f` used to wipe the
-# downloaded model files — this avoids that. PVCs are only removed via --volumes.)
-log "Clearing any legacy (non-Helm) resources (PVCs kept)..."
-kubectl delete -n "${NS}" deploy api redis dashboard proxy benchmark-runner \
-  worker-135m worker-360m llm-135m llm-360m --ignore-not-found &>/dev/null || true
-kubectl delete -n "${NS}" svc api redis dashboard proxy llm-135m llm-360m --ignore-not-found &>/dev/null || true
-kubectl delete -n "${NS}" scaledobject.keda.sh --all --ignore-not-found &>/dev/null || true
-kubectl delete -n "${NS}" configmap llm-models llm-args proxy-nginx-conf --ignore-not-found &>/dev/null || true
-kubectl delete -n "${NS}" secret llm-secrets --ignore-not-found &>/dev/null || true
-
 # ── Optionally delete PVCs ────────────────────────────────────────────────────
 if [ "$DELETE_VOLUMES" = true ]; then
   warn "Deleting PVCs (GGUF model files will be re-downloaded on next deploy)..."
