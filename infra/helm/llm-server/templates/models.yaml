@@ -1,0 +1,249 @@
+{{- $root := . }}
+{{- $ns := $root.Release.Namespace }}
+{{- $models := ($root.Files.Get "files/models.json" | fromJson).models }}
+{{- range $m := $models }}
+{{- if $m.enabled }}
+{{- $id := $m.id }}
+{{- $args := mergeOverwrite (deepCopy $root.Values.defaults.llmArgs) (default dict $m.llm_args) }}
+{{- $pvc := default $root.Values.defaults.pvcSize $m.pvc_size }}
+{{- $llmRes := dig "resources" "llm" $root.Values.defaults.llmResources $m }}
+{{- $wkRes := dig "resources" "worker" $root.Values.defaults.workerResources $m }}
+---
+# ════════════════════════ model: {{ $id }} ════════════════════════
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-{{ $id }}-pvc
+  labels:
+    app.kubernetes.io/part-of: llm-server
+    llm-model: "{{ $id }}"
+  annotations:
+    helm.sh/resource-policy: keep   # survive `helm uninstall` so GGUFs aren't re-downloaded
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ $pvc }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-{{ $id }}
+  labels:
+    app: llm-{{ $id }}
+    app.kubernetes.io/part-of: llm-server
+    llm-model: "{{ $id }}"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-{{ $id }}
+  template:
+    metadata:
+      labels:
+        app: llm-{{ $id }}
+        llm-model: "{{ $id }}"
+    spec:
+      initContainers:
+        - name: model-downloader
+          image: {{ $root.Values.images.downloader }}
+          env:
+            - name: MODEL_FILE
+              value: "{{ $m.model_file }}"
+            - name: MODEL_URL
+              value: "{{ $m.model_url }}"
+          command:
+            - sh
+            - -c
+            - |
+              if [ -f "/models/$MODEL_FILE" ]; then
+                echo "Model already exists, skipping download."
+              else
+                echo "Downloading $MODEL_FILE..." &&
+                wget -q -O "/models/$MODEL_FILE" "$MODEL_URL" &&
+                echo "Download complete."
+              fi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      containers:
+        - name: llm-{{ $id }}
+          image: {{ $root.Values.images.llamacpp }}
+          resources:
+            {{- toYaml $llmRes | nindent 12 }}
+          args:
+            - --model
+            - /models/{{ $m.model_file }}
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --ctx-size
+            - "{{ $args.ctx_size }}"
+            - --threads
+            - "{{ $args.threads }}"
+            - --parallel
+            - "{{ $args.parallel }}"
+            - --threads-http
+            - "{{ $args.threads_http }}"
+            - --slots
+            - --metrics
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+        - name: slots-sidecar
+          image: {{ $root.Values.images.worker }}
+          imagePullPolicy: {{ $root.Values.imagePullPolicy }}
+          command: ["uv", "run", "python", "slots_sidecar.py"]
+          resources:
+            requests: { cpu: "10m", memory: "32Mi" }
+            limits:   { cpu: "100m", memory: "64Mi" }
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: llm-secrets
+                  key: REDIS_URL
+            - name: LLM_URL
+              value: http://localhost:8080
+            - name: MODEL_ID
+              value: "{{ $id }}"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: models-{{ $id }}-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-{{ $id }}
+  labels:
+    app.kubernetes.io/part-of: llm-server
+    llm-model: "{{ $id }}"
+spec:
+  selector:
+    app: llm-{{ $id }}
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-{{ $id }}
+  labels:
+    app: worker-{{ $id }}
+    app.kubernetes.io/part-of: llm-server
+    llm-model: "{{ $id }}"
+spec:
+  selector:
+    matchLabels:
+      app: worker-{{ $id }}
+  template:
+    metadata:
+      labels:
+        app: worker-{{ $id }}
+        llm-model: "{{ $id }}"
+      annotations:
+        rollme: "{{ $root.Values.rollme }}"
+    spec:
+      containers:
+        - name: worker-{{ $id }}
+          image: {{ $root.Values.images.worker }}
+          imagePullPolicy: {{ $root.Values.imagePullPolicy }}
+          resources:
+            {{- toYaml $wkRes | nindent 12 }}
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: llm-secrets
+                  key: REDIS_URL
+            - name: MODELS_CONFIG_PATH
+              value: /config/models.json
+            - name: MODEL_ID
+              value: "{{ $id }}"
+            - name: LLM_URL
+              value: http://llm-{{ $id }}:8080
+          volumeMounts:
+            - name: models-registry
+              mountPath: /config
+              readOnly: true
+          readinessProbe:
+            exec: { command: ["sh", "-c", "find /tmp/worker_alive -mmin -1 | grep -q ."] }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["sh", "-c", "find /tmp/worker_alive -mmin -1 | grep -q ."] }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+      volumes:
+        - name: models-registry
+          configMap:
+            name: llm-models
+{{- if $root.Values.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-{{ $id }}
+  labels:
+    app.kubernetes.io/part-of: llm-server
+    llm-model: "{{ $id }}"
+spec:
+  scaleTargetRef:
+    name: worker-{{ $id }}
+  minReplicaCount: 1
+  maxReplicaCount: {{ default 1 $m.max_replicas }}
+  cooldownPeriod: 30
+  pollingInterval: 15
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.{{ $ns }}.svc.cluster.local:6379
+        stream: "llm:work:{{ $id }}"
+        consumerGroup: "llm-workers-{{ $id }}"
+        lagCount: "5"
+        activationLagCount: "1"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: llm-{{ $id }}
+  labels:
+    app.kubernetes.io/part-of: llm-server
+    llm-model: "{{ $id }}"
+spec:
+  scaleTargetRef:
+    name: llm-{{ $id }}
+  minReplicaCount: 1
+  maxReplicaCount: {{ default 1 $m.max_llm_pods }}
+  cooldownPeriod: 120
+  pollingInterval: 20
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.{{ $ns }}.svc.cluster.local:6379
+        stream: "llm:work:{{ $id }}"
+        consumerGroup: "llm-workers-{{ $id }}"
+        lagCount: "15"
+        activationLagCount: "5"
+{{- end }}
+{{- end }}
+{{- end }}

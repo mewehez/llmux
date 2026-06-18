@@ -1,166 +1,254 @@
+# ─────────────────────────────────────────────────────────────────────
+# GENERATED from config/models.json — DO NOT EDIT BY HAND.
+# Re-generate after editing the registry:
+#   uv run --with pyyaml python infra/scripts/generate-compose.py  (or: make generate)
+# Verify it is in sync with the registry:  make verify-generated
+# Per ENABLED model: llm-<id> / worker-<id> / slots-<id> / model-downloader-<id>
+# (host port for llm-<id> = 8001 + its index in the registry).
+# ─────────────────────────────────────────────────────────────────────
 services:
   redis:
     image: redis:7-alpine
-    ports: 
-      - "6379:6379"
+    ports:
+    - 6379:6379
     volumes:
-      - redis_data:/data
+    - redis_data:/data
     command: redis-server --appendonly yes
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+      - CMD
+      - redis-cli
+      - ping
       interval: 5s
       timeout: 3s
       retries: 5
-  
   api:
     build: ./api
     ports:
-      - "8000:8080"
+    - 8000:8080
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - STREAM_135M=llm:work:135m
-      - STREAM_360M=llm:work:360m
+    - REDIS_URL=redis://redis:6379/0
+    - MODELS_CONFIG_PATH=/config/models.json
     volumes:
-      - ./api:/app        # bind mount — host code syncs to container
-      - /app/.venv        # anonymous volume — protects container's .venv
+    - ./api:/app
+    - /app/.venv
+    - ./config:/config:ro
     depends_on:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test:
+      - CMD-SHELL
+      - curl -sf http://localhost:8080/health || exit 1
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
-  
   dashboard:
-    build: 
+    build:
       context: ./dashboard
       target: dev
     ports:
-      - "5173:5173"
+    - 5173:5173
     volumes:
-      - ./dashboard:/app
-      - /app/node_modules
+    - ./dashboard:/app
+    - /app/node_modules
     environment:
-      - VITE_API_URL=http://localhost:8000
+    - VITE_API_URL=http://localhost:8000
     depends_on:
       api:
         condition: service_healthy
-  
   llm-135m:
     image: ghcr.io/ggml-org/llama.cpp:server
     ports:
-      - "8001:8080"
+    - 8001:8080
     volumes:
-      - models_135m:/models
-    command: >
-      --model /models/SmolLM2-135M-Instruct-Q4_K_M.gguf
-      --host 0.0.0.0
-      --port 8080
-      --ctx-size 2048
-      --threads 4
-      --parallel 4
+    - models_135m:/models
+    command:
+    - --model
+    - /models/SmolLM2-135M-Instruct-Q4_K_M.gguf
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8080'
+    - --ctx-size
+    - '2048'
+    - --threads
+    - '4'
+    - --parallel
+    - '4'
+    - --threads-http
+    - '8'
+    - --slots
+    - --metrics
     depends_on:
       redis:
         condition: service_healthy
       model-downloader-135m:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test:
+      - CMD-SHELL
+      - curl -sf http://localhost:8080/health || exit 1
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
-  
+  model-downloader-135m:
+    image: alpine:3.19
+    volumes:
+    - models_135m:/models
+    command:
+    - sh
+    - -c
+    - if [ -f /models/SmolLM2-135M-Instruct-Q4_K_M.gguf ]; then echo 'Model exists, skipping.'; else echo 'Downloading SmolLM2-135M-Instruct-Q4_K_M.gguf' && wget -q -O /models/SmolLM2-135M-Instruct-Q4_K_M.gguf 'https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf' && echo 'Done'; fi
+  worker-135m:
+    build: ./worker
+    environment:
+    - REDIS_URL=redis://redis:6379/0
+    - MODELS_CONFIG_PATH=/config/models.json
+    - MODEL_ID=135m
+    - LLM_URL=http://llm-135m:8080
+    volumes:
+    - ./worker:/app
+    - /app/.venv
+    - ./config:/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      llm-135m:
+        condition: service_healthy
+  slots-135m:
+    build: ./worker
+    entrypoint:
+    - uv
+    - run
+    - python
+    - slots_sidecar.py
+    environment:
+    - REDIS_URL=redis://redis:6379/0
+    - MODELS_CONFIG_PATH=/config/models.json
+    - MODEL_ID=135m
+    - LLM_URL=http://llm-135m:8080
+    - POD_NAME=llm-135m
+    volumes:
+    - ./worker:/app
+    - /app/.venv
+    - ./config:/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      llm-135m:
+        condition: service_healthy
   llm-360m:
     image: ghcr.io/ggml-org/llama.cpp:server
-    ports:  
-      - "8002:8080"
+    ports:
+    - 8002:8080
     volumes:
-      - models_360m:/models
-    command: >
-      --model /models/SmolLM2-360M-Instruct-Q4_K_M.gguf
-      --host 0.0.0.0
-      --port 8080
-      --ctx-size 2048
-      --threads 4
-      --parallel 4
+    - models_360m:/models
+    command:
+    - --model
+    - /models/SmolLM2-360M-Instruct-Q4_K_M.gguf
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8080'
+    - --ctx-size
+    - '2048'
+    - --threads
+    - '4'
+    - --parallel
+    - '4'
+    - --threads-http
+    - '8'
+    - --slots
+    - --metrics
     depends_on:
       redis:
         condition: service_healthy
       model-downloader-360m:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test:
+      - CMD-SHELL
+      - curl -sf http://localhost:8080/health || exit 1
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
-  
-  worker-135m:
-    build: ./worker
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - STREAM=llm:work:135m
-      - LLM_URL=http://llm-135m:8080
-      - CONSUMER_GROUP=llm-workers-135m
+  model-downloader-360m:
+    image: alpine:3.19
     volumes:
-      - ./worker:/app
-      - /app/.venv
-    depends_on:
-      redis:
-        condition: service_healthy
-      llm-135m:
-        condition: service_healthy
-
+    - models_360m:/models
+    command:
+    - sh
+    - -c
+    - if [ -f /models/SmolLM2-360M-Instruct-Q4_K_M.gguf ]; then echo 'Model exists, skipping.'; else echo 'Downloading SmolLM2-360M-Instruct-Q4_K_M.gguf' && wget -q -O /models/SmolLM2-360M-Instruct-Q4_K_M.gguf 'https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf' && echo 'Done'; fi
   worker-360m:
     build: ./worker
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - STREAM=llm:work:360m
-      - LLM_URL=http://llm-360m:8080
-      - CONSUMER_GROUP=llm-workers-360m
+    - REDIS_URL=redis://redis:6379/0
+    - MODELS_CONFIG_PATH=/config/models.json
+    - MODEL_ID=360m
+    - LLM_URL=http://llm-360m:8080
     volumes:
-      - ./worker:/app
-      - /app/.venv
+    - ./worker:/app
+    - /app/.venv
+    - ./config:/config:ro
     depends_on:
       redis:
         condition: service_healthy
       llm-360m:
         condition: service_healthy
-  
-  model-downloader-135m:
-    image: alpine:3.19
+  slots-360m:
+    build: ./worker
+    entrypoint:
+    - uv
+    - run
+    - python
+    - slots_sidecar.py
+    environment:
+    - REDIS_URL=redis://redis:6379/0
+    - MODELS_CONFIG_PATH=/config/models.json
+    - MODEL_ID=360m
+    - LLM_URL=http://llm-360m:8080
+    - POD_NAME=llm-360m
     volumes:
-      - models_135m:/models
-    command: >
-      sh -c "
-        if [ -f /models/SmolLM2-135M-Instruct-Q4_K_M.gguf ]; then
-          echo 'Model already exists, skipping dowload.';
-        else
-          echo 'Downloading SmolLM2-135M-Instruct-Q4_K_M.gguf' && 
-          wget -q -O /models/SmolLM2-135M-Instruct-Q4_K_M.gguf https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf && 
-          echo 'Download complete';
-        fi
-      "
-  
-  model-downloader-360m:
-    image: alpine:3.19
+    - ./worker:/app
+    - /app/.venv
+    - ./config:/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      llm-360m:
+        condition: service_healthy
+  benchmark-runner:
+    build: ./worker
+    entrypoint:
+    - uv
+    - run
+    - python
+    - bench_worker.py
+    environment:
+    - REDIS_URL=redis://redis:6379/0
+    - MODELS_CONFIG_PATH=/config/models.json
     volumes:
-      - models_360m:/models
-    command: >
-      sh -c "
-        if [ -f /models/SmolLM2-360M-Instruct-Q4_K_M.gguf ]; then
-          echo 'Model already exists, skipping download.';
-        else
-          echo 'Downloading SmolLM2-360M-Instruct-Q4_K_M.gguf' && 
-          wget -q -O /models/SmolLM2-360M-Instruct-Q4_K_M.gguf https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf && 
-          echo 'Download complete';
-        fi
-      "
-
+    - ./worker:/app
+    - /app/.venv
+    - ./config:/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+    - ollama
+    ports:
+    - 11434:11434
+    volumes:
+    - ollama_data:/root/.ollama
 volumes:
-  redis_data:
-  models_135m:
-  models_360m:
+  redis_data: null
+  models_135m: null
+  models_360m: null
+  ollama_data: null

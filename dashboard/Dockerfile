@@ -6,6 +6,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 
 FROM base AS dev
+EXPOSE 5173
 ENTRYPOINT ["pnpm"]
 CMD ["dev", "--host", "0.0.0.0", "--port", "5173"]
 
@@ -17,5 +18,6 @@ FROM node:22-alpine AS production
 RUN npm install -g serve
 WORKDIR /app
 COPY --from=builder /app/dist ./dist
+EXPOSE 5173
 ENTRYPOINT ["serve"]
 CMD ["-s", "dist", "-l", "5173"]

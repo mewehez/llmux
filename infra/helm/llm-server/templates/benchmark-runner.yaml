@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: benchmark-runner
+  labels:
+    {{- include "llm-server.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: benchmark-runner
+  template:
+    metadata:
+      labels:
+        app: benchmark-runner
+      annotations:
+        rollme: "{{ .Values.rollme }}"
+    spec:
+      containers:
+        - name: benchmark-runner
+          image: {{ .Values.images.worker }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["uv", "run", "python", "bench_worker.py"]
+          resources:
+            {{- toYaml .Values.defaults.workerResources | nindent 12 }}
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: llm-secrets
+                  key: REDIS_URL
+            - name: MODELS_CONFIG_PATH
+              value: /config/models.json
+          volumeMounts:
+            - name: models-registry
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: models-registry
+          configMap:
+            name: llm-models

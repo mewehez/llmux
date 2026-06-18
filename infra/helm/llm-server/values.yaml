@@ -1,0 +1,46 @@
+# Chart-wide, model-agnostic config. The MODEL SET itself is NOT here — it lives
+# in config/models.json (copied to files/models.json by deploy-k8s.sh and read at
+# render time). Per-model resources/args come from that registry, with the
+# `defaults` below filling any field a model entry omits.
+
+# Bumped by deploy-k8s.sh (to a timestamp) so app pods roll and pick up rebuilt
+# :k8s images even though the image tag is unchanged.
+rollme: "0"
+
+imagePullPolicy: Never
+images:
+  api:       llm-server-api:k8s
+  worker:    llm-server-worker:k8s
+  dashboard: llm-server-dashboard:k8s
+  llamacpp:  ghcr.io/ggml-org/llama.cpp:server
+  redis:     redis:7-alpine
+  proxy:     nginx:1.27-alpine
+  downloader: alpine:3.19
+
+redis:
+  storage: 1Gi
+  resources:
+    requests: { cpu: "50m", memory: "128Mi" }
+    limits:   { cpu: "500m", memory: "256Mi" }
+
+api:
+  resources:
+    requests: { cpu: "50m", memory: "128Mi" }
+    limits:   { cpu: "1", memory: "256Mi" }
+
+proxy:
+  nodePort: 30080
+
+keda:
+  enabled: true
+
+# Defaults applied per model when a model entry omits the field.
+defaults:
+  llmArgs: { ctx_size: 2048, threads: 4, parallel: 4, threads_http: 8 }
+  pvcSize: "500Mi"
+  llmResources:
+    requests: { cpu: "1", memory: "512Mi" }
+    limits:   { cpu: "4", memory: "1Gi" }
+  workerResources:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits:   { cpu: "1", memory: "192Mi" }

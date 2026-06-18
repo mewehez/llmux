@@ -12,6 +12,7 @@ wheels/
 .venv
 
 node_modules/
+.pnpm-store/
 .DS_Store
 
 # Secrets
@@ -20,3 +21,11 @@ node_modules/
 
 # Custom
 Handoff.md
+
+.claude/
+
+*PLAN.md
+
+# Helm — build artifacts only (chart source + files/models.json stay committed)
+infra/helm/**/charts/
+infra/helm/**/*.tgz

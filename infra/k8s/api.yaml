@@ -16,15 +16,31 @@ spec:
         - name: api
           image: llm-server-api:k8s
           imagePullPolicy: Never
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "256Mi"
           ports:
             - containerPort: 8080
+          # Tunables live in api/.env (baked into the image, loaded by pydantic).
+          # The model SET comes from the llm-models ConfigMap mounted at /config;
+          # REDIS_URL comes from the llm-secrets Secret. Scaling ceilings now live
+          # in the registry (and, from Phase 4, the KEDA ScaledObjects).
           env:
             - name: REDIS_URL
-              value: redis://redis:6379/0
-            - name: STREAM_135M
-              value: llm:work:135m
-            - name: STREAM_360M
-              value: llm:work:360m
+              valueFrom:
+                secretKeyRef:
+                  name: llm-secrets
+                  key: REDIS_URL
+            - name: MODELS_CONFIG_PATH
+              value: /config/models.json
+          volumeMounts:
+            - name: models-registry
+              mountPath: /config
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -37,6 +53,10 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: models-registry
+          configMap:
+            name: llm-models
 
 ---
 apiVersion: v1
@@ -49,5 +69,4 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
-      nodePort: 30000
-  type: NodePort
+  type: ClusterIP

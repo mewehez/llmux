@@ -1,0 +1,94 @@
+# KEDA autoscaling (Phase 4).
+#
+# Workers and llm pods are decoupled deployments that watch the SAME Redis work
+# stream but with different thresholds + cooldowns (see scaling-theory.md):
+#   * workers   — cheap, stateless → scale aggressively (low threshold, fast cooldown)
+#   * llm pods  — RAM-bound, slow to load → scale conservatively (high threshold, long cooldown)
+#
+# We scale on LAG (entries not yet read by the consumer group = the backlog), NOT
+# pendingEntriesCount: workers only XREADGROUP `count=free` (≤ concurrency), so the
+# PEL is bounded by concurrency and never reflects a backlog. Lag does. Requires
+# Redis 7+ (XINFO GROUPS lag) — we run redis:7.
+#
+# maxReplicaCount mirrors config/models.json (max_replicas / max_llm_pods).
+# Requires KEDA installed in the cluster (deploy-k8s.sh installs it).
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-135m
+spec:
+  scaleTargetRef:
+    name: worker-135m
+  minReplicaCount: 1
+  maxReplicaCount: 3            # = config/models.json 135m.max_replicas
+  cooldownPeriod: 30
+  pollingInterval: 15
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.llm-server.svc.cluster.local:6379
+        stream: llm:work:135m
+        consumerGroup: llm-workers-135m
+        lagCount: "5"             # scale up when backlog > 5 per replica
+        activationLagCount: "1"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-360m
+spec:
+  scaleTargetRef:
+    name: worker-360m
+  minReplicaCount: 1
+  maxReplicaCount: 2            # = config/models.json 360m.max_replicas
+  cooldownPeriod: 30
+  pollingInterval: 15
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.llm-server.svc.cluster.local:6379
+        stream: llm:work:360m
+        consumerGroup: llm-workers-360m
+        lagCount: "5"
+        activationLagCount: "1"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: llm-135m
+spec:
+  scaleTargetRef:
+    name: llm-135m
+  minReplicaCount: 1
+  maxReplicaCount: 2            # = config/models.json 135m.max_llm_pods (RAM-bound)
+  cooldownPeriod: 120          # model load is expensive — keep warm longer
+  pollingInterval: 20
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.llm-server.svc.cluster.local:6379
+        stream: llm:work:135m
+        consumerGroup: llm-workers-135m
+        lagCount: "15"           # higher threshold than workers
+        activationLagCount: "5"
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: llm-360m
+spec:
+  scaleTargetRef:
+    name: llm-360m
+  minReplicaCount: 1
+  maxReplicaCount: 2            # = config/models.json 360m.max_llm_pods
+  cooldownPeriod: 120
+  pollingInterval: 20
+  triggers:
+    - type: redis-streams
+      metadata:
+        address: redis.llm-server.svc.cluster.local:6379
+        stream: llm:work:360m
+        consumerGroup: llm-workers-360m
+        lagCount: "15"
+        activationLagCount: "5"

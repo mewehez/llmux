@@ -27,16 +27,26 @@ spec:
       initContainers:
         - name: model-downloader
           image: alpine:3.19
+          env:
+            - name: MODEL_FILE
+              valueFrom:
+                configMapKeyRef:
+                  name: llm-args
+                  key: LLM_135M_MODEL_FILE
+            - name: MODEL_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: llm-args
+                  key: LLM_135M_MODEL_URL
           command:
             - sh
             - -c
             - |
-              if [ -f /models/SmolLM2-135M-Instruct-Q4_K_M.gguf ]; then
+              if [ -f "/models/$MODEL_FILE" ]; then
                 echo "Model already exists, skipping download."
               else
-                echo "Downloading SmolLM2-135M..." &&
-                wget -q -O /models/SmolLM2-135M-Instruct-Q4_K_M.gguf \
-                  https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf &&
+                echo "Downloading $MODEL_FILE..." &&
+                wget -q -O "/models/$MODEL_FILE" "$MODEL_URL" &&
                 echo "Download complete."
               fi
           volumeMounts:
@@ -46,19 +56,56 @@ spec:
       containers:
         - name: llm-135m
           image: ghcr.io/ggml-org/llama.cpp:server
+          env:
+            - name: LLM_MODEL_FILE
+              valueFrom:
+                configMapKeyRef:
+                  name: llm-args
+                  key: LLM_135M_MODEL_FILE
+            - name: LLM_CTX_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: llm-args
+                  key: LLM_135M_CTX_SIZE
+            - name: LLM_THREADS
+              valueFrom:
+                configMapKeyRef:
+                  name: llm-args
+                  key: LLM_135M_THREADS
+            - name: LLM_PARALLEL
+              valueFrom:
+                configMapKeyRef:
+                  name: llm-args
+                  key: LLM_135M_PARALLEL
+            - name: LLM_THREADS_HTTP
+              valueFrom:
+                configMapKeyRef:
+                  name: llm-args
+                  key: LLM_135M_THREADS_HTTP
+          resources:
+            requests:
+              cpu: "1"
+              memory: "512Mi"
+            limits:
+              cpu: "4"
+              memory: "1Gi"
           args:
             - --model
-            - /models/SmolLM2-135M-Instruct-Q4_K_M.gguf
+            - /models/$(LLM_MODEL_FILE)
             - --host
             - 0.0.0.0
             - --port
             - "8080"
             - --ctx-size
-            - "2048"
+            - $(LLM_CTX_SIZE)
             - --threads
-            - "4"
+            - $(LLM_THREADS)
             - --parallel
-            - "4"
+            - $(LLM_PARALLEL)
+            - --threads-http
+            - $(LLM_THREADS_HTTP)
+            - --slots
+            - --metrics
           ports:
             - containerPort: 8080
           volumeMounts:
@@ -78,6 +125,34 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
 
+        # Sidecar: polls llama.cpp /slots on localhost and publishes
+        # per-slot utilisation to Redis (key llm:slots:135m:{pod}).
+        - name: slots-sidecar
+          image: llm-server-worker:k8s
+          imagePullPolicy: Never
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          command: ["uv", "run", "python", "slots_sidecar.py"]
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: llm-secrets
+                  key: REDIS_URL
+            - name: LLM_URL
+              value: http://localhost:8080
+            - name: MODEL_ID
+              value: "135m"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
       volumes:
         - name: models-135m
           persistentVolumeClaim:
@@ -94,5 +169,4 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
-      nodePort: 30002
-  type: NodePort
+  type: ClusterIP

@@ -1,296 +1,204 @@
-import { useState, useRef } from "react"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import type React from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
+import { Lightning } from "@phosphor-icons/react"
+import { ModelSelect } from "@/components/ModelSelect"
+import { RunCard } from "@/components/RunCard"
+import type { LoadTestSummary } from "@/components/MetricsPanel"
+import { randomSampleMessage, simulateLoadTask } from "@/lib/mock"
+import { API_URL, MOCK, postChat } from "@/lib/api"
+import type { EventItem, LoadTestRun, ModelSelection, WorkerMetrics } from "@/lib/types"
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000"
+type TaskPatch = Partial<LoadTestRun["tasks"][number]>
 
-type Model = "135m" | "360m"
-type TaskStatus = "pending" | "streaming" | "done" | "error"
+export function LoadTester({
+  workers,
+  onThroughput,
+  onEvent,
+  onComplete,
+  runs,
+  setRuns,
+  running,
+  setRunning,
+}: {
+  workers: WorkerMetrics[]
+  onThroughput: (tokensPerSec: number) => void
+  onEvent: (event: EventItem) => void
+  onComplete: (summary: LoadTestSummary) => void
+  // Lifted to App so results survive tab switches (base-ui remounts panels).
+  runs: LoadTestRun[]
+  setRuns: React.Dispatch<React.SetStateAction<LoadTestRun[]>>
+  running: boolean
+  setRunning: React.Dispatch<React.SetStateAction<boolean>>
+}) {
+  const [count, setCount] = useState(5)
+  const [model, setModel] = useState<ModelSelection>("auto")
+  const esRef = useRef<EventSource | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-interface Task {
-  id:        string
-  taskId:    string
-  model:     Model
-  status:    TaskStatus
-  tokens:    number
-  elapsed:   number | null   // ms from send to done
-  startedAt: number
-}
+  // Close the run's event stream if the panel unmounts mid-run.
+  useEffect(() => () => {
+    esRef.current?.close()
+    if (timerRef.current) clearTimeout(timerRef.current)
+  }, [])
 
-const PRESET_MESSAGES = [
-  "Count from 1 to 10",
-  "What is the capital of France?",
-  "Write a haiku about rain",
-  "List 3 colors",
-  "Say hello",
-]
-
-function TaskRow({ task }: { task: Task }) {
-  const statusColors: Record<TaskStatus, string> = {
-    pending:   "border-slate-400 text-slate-500",
-    streaming: "border-yellow-500 text-yellow-600",
-    done:      "border-green-500 text-green-600",
-    error:     "border-red-500 text-red-600",
-  }
-
-  return (
-    <div className="grid grid-cols-5 gap-2 text-sm py-1.5 items-center border-b last:border-0">
-      <span className="font-mono text-xs text-muted-foreground truncate">
-        {task.taskId.slice(0, 8)}
-      </span>
-      <span className="text-xs text-muted-foreground">
-        SmolLM2-{task.model.toUpperCase()}
-      </span>
-      <Badge variant="outline" className={statusColors[task.status]}>
-        {task.status}
-      </Badge>
-      <span className="text-right tabular-nums">
-        {task.tokens > 0 ? `${task.tokens} tok` : "—"}
-      </span>
-      <span className="text-right tabular-nums text-muted-foreground">
-        {task.elapsed != null
-          ? `${(task.elapsed / 1000).toFixed(1)}s`
-          : task.status === "streaming"
-          ? `${((Date.now() - task.startedAt) / 1000).toFixed(1)}s`
-          : "—"}
-      </span>
-    </div>
-  )
-}
-
-export function LoadTester() {
-  const [count, setCount]     = useState(5)
-  const [model, setModel]     = useState<Model>("135m")
-  const [running, setRunning] = useState(false)
-  const [tasks, setTasks]     = useState<Task[]>([])
-  const esRefs                = useRef<Map<string, EventSource>>(new Map())
-
-  const updateTask = (id: string, patch: Partial<Task>) =>
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t))
-
-  async function runTest() {
+  function runTest() {
     if (running) return
-
-    // Close any lingering SSE connections
-    esRefs.current.forEach(es => es.close())
-    esRefs.current.clear()
-
     setRunning(true)
-    setTasks([])
 
-    const message = PRESET_MESSAGES[Math.floor(Math.random() * PRESET_MESSAGES.length)]
+    const runId = `run-${Date.now()}`
+    const run: LoadTestRun = {
+      id: runId,
+      time: new Date().toLocaleTimeString(),
+      model,
+      tasks: Array.from({ length: count }, (_, i) => ({
+        id: `task-${i}`, prompt: "", response: "", status: "pending",
+        tokens: 0, elapsedMs: null, tokensPerSec: null,
+      })),
+    }
+    setRuns(prev => [run, ...prev].slice(0, 10))
+    onEvent({ id: `ev-${Date.now()}`, time: new Date().toLocaleTimeString(), type: "loadtest", message: `Load test started — ${count}x ${model === "auto" ? "auto" : `SmolLM2-${model}`}` })
 
-    // Fire all requests concurrently
-    const promises = Array.from({ length: count }, async (_, i) => {
-      const id = `task-${i}`
+    function updateTask(taskId: string, patch: TaskPatch) {
+      setRuns(prev => prev.map(r => r.id !== runId ? r : {
+        ...r,
+        tasks: r.tasks.map(t => t.id === taskId ? { ...t, ...patch } : t),
+      }))
+    }
 
-      try {
-        const res = await fetch(`${API_URL}/chat`, {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ message, model }),
-        })
+    const done = new Set<string>()   // local task ids already finalized
+    let finished = 0
+    let errors = 0
+    const elapsedTimes: number[] = []
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const { task_id } = await res.json()
+    function cleanup() {
+      esRef.current?.close()
+      esRef.current = null
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+    }
 
-        const task: Task = {
-          id,
-          taskId:    task_id,
-          model,
-          status:    "pending",
-          tokens:    0,
-          elapsed:   null,
-          startedAt: Date.now(),
-        }
+    function finishTask(taskId: string, p: {
+      status: "done" | "error" | "timeout"; workerId: string; llmPod: string
+      tokens: number; elapsedMs: number; tokensPerSec: number; response?: string
+    }) {
+      if (done.has(taskId)) return
+      done.add(taskId)
+      updateTask(taskId, {
+        status: p.status, workerId: p.workerId, llmPod: p.llmPod,
+        tokens: p.tokens, elapsedMs: p.elapsedMs, tokensPerSec: p.tokensPerSec,
+        response: p.response ?? "",
+      })
+      if (p.status === "done") onThroughput(p.tokensPerSec)
+      if (p.status === "error") errors += 1
+      elapsedTimes.push(p.elapsedMs)
+      finished += 1
 
-        setTasks(prev => [...prev, task])
-
-        // Open SSE for each task
-        await new Promise<void>((resolve) => {
-          const es = new EventSource(`${API_URL}/sse/${task_id}`)
-          esRefs.current.set(id, es)
-
-          es.onmessage = (event) => {
-            const payload = JSON.parse(event.data)
-
-            if (payload.type === "token") {
-              updateTask(id, {
-                status: "streaming",
-                tokens: (tasks.find(t => t.id === id)?.tokens ?? 0) + 1,
-              })
-              // Use functional update to get latest token count
-              setTasks(prev => prev.map(t =>
-                t.id === id ? { ...t, status: "streaming", tokens: t.tokens + 1 } : t
-              ))
-            }
-
-            if (payload.type === "done") {
-              setTasks(prev => prev.map(t =>
-                t.id === id
-                  ? { ...t, status: "done", elapsed: Date.now() - t.startedAt }
-                  : t
-              ))
-              es.close()
-              esRefs.current.delete(id)
-              resolve()
-            }
-
-            if (payload.type === "error") {
-              setTasks(prev => prev.map(t =>
-                t.id === id ? { ...t, status: "error" } : t
-              ))
-              es.close()
-              esRefs.current.delete(id)
-              resolve()
-            }
-          }
-
-          es.onerror = () => {
-            setTasks(prev => prev.map(t =>
-              t.id === id ? { ...t, status: "error" } : t
-            ))
-            es.close()
-            esRefs.current.delete(id)
-            resolve()
-          }
-        })
-
-      } catch {
-        setTasks(prev => [...prev, {
-          id,
-          taskId:    "failed",
-          model,
-          status:    "error",
-          tokens:    0,
-          elapsed:   null,
-          startedAt: Date.now(),
-        }])
+      if (finished >= run.tasks.length) {
+        cleanup()
+        setRunning(false)
+        const avg = elapsedTimes.length ? elapsedTimes.reduce((a, b) => a + b, 0) / elapsedTimes.length : 0
+        onComplete({ count, model, done: finished - errors, errors, avgElapsed: avg })
+        onEvent({ id: `ev-${Date.now()}-lt`, time: new Date().toLocaleTimeString(), type: "loadtest", message: `Load test finished — ${finished - errors}/${finished} ok, avg ${(avg / 1000).toFixed(1)}s` })
       }
+    }
+
+    // ── Mock mode: simulate locally (no network/connections) ──
+    if (MOCK) {
+      run.tasks.forEach(task => {
+        const prompt = randomSampleMessage()
+        updateTask(task.id, { status: "streaming", prompt })
+        simulateLoadTask(model, workers, () => {}, ({ response, status, workerId, llmPod, tokens, elapsedMs }) =>
+          finishTask(task.id, { status, workerId, llmPod, tokens, elapsedMs, response,
+            tokensPerSec: elapsedMs > 0 ? tokens / (elapsedMs / 1000) : 0 }))
+      })
+      return
+    }
+
+    // ── Live mode: fire N requests, then drive completions off ONE events stream ──
+    // (one SSE per run, not per task — avoids the browser's ~6-connection-per-host
+    //  limit starving the dashboard's polling while a load test runs.)
+    const idToLocal = new Map<string, string>()  // server task_id → local task id
+    const startedAt = Date.now()
+
+    run.tasks.forEach(task => {
+      const prompt = randomSampleMessage()
+      updateTask(task.id, { status: "streaming", prompt })
+      postChat(prompt, model)
+        .then(({ task_id }) => { idToLocal.set(task_id, task.id) })
+        .catch(() => finishTask(task.id, { status: "error", workerId: "—", llmPod: "—", tokens: 0, elapsedMs: Date.now() - startedAt, tokensPerSec: 0 }))
     })
 
-    await Promise.all(promises)
-    setRunning(false)
-  }
+    const es = new EventSource(`${API_URL}/events/stream`)
+    esRef.current = es
+    es.onmessage = (ev) => {
+      let e: Record<string, string>
+      try { e = JSON.parse(ev.data) } catch { return }
+      if (e.type !== "task_completed" && e.type !== "task_error") return
+      const localId = idToLocal.get(e.task_id)
+      if (!localId) return
+      finishTask(localId, {
+        status: e.type === "task_completed" ? "done" : "error",
+        workerId: e.worker_id ?? "", llmPod: e.llm ?? "",
+        tokens: Number(e.tokens) || 0,
+        elapsedMs: Number(e.latency_ms) || (Date.now() - startedAt),
+        tokensPerSec: Number(e.tok_s) || 0,
+      })
+    }
+    // EventSource auto-reconnects on transient errors; keep it open.
 
-  const done      = tasks.filter(t => t.status === "done").length
-  const streaming = tasks.filter(t => t.status === "streaming").length
-  const avgElapsed = tasks
-    .filter(t => t.elapsed != null)
-    .map(t => t.elapsed!)
-    .reduce((a, b, _, arr) => a + b / arr.length, 0)
+    // Safety net: mark stragglers as timeout so a run always completes.
+    timerRef.current = setTimeout(() => {
+      run.tasks.forEach(task => finishTask(task.id, { status: "timeout", workerId: "—", llmPod: "—", tokens: 0, elapsedMs: Date.now() - startedAt, tokensPerSec: 0 }))
+    }, 180000)
+  }
 
   return (
     <div className="space-y-4">
-
-      {/* Controls */}
-      <div className="flex flex-wrap gap-4 items-end">
+      <div className="flex flex-wrap items-end gap-4">
         <div className="space-y-1.5">
           <Label>Concurrent requests</Label>
           <Input
             type="number"
             min={1}
-            max={20}
+            max={200}
             value={count}
-            onChange={e => setCount(Number(e.target.value))}
+            onChange={e => setCount(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
             className="w-24"
             disabled={running}
           />
         </div>
-
         <div className="space-y-1.5">
           <Label>Model</Label>
-          <div className="flex gap-2">
-            {(["135m", "360m"] as Model[]).map(m => (
-              <button
-                key={m}
-                onClick={() => setModel(m)}
-                disabled={running}
-                className={[
-                  "px-3 py-1.5 rounded-md text-sm font-medium border transition-colors",
-                  model === m
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-background text-muted-foreground border-border hover:border-primary",
-                  running ? "opacity-50 cursor-not-allowed" : "",
-                ].join(" ")}
-              >
-                SmolLM2-{m.toUpperCase()}
-              </button>
-            ))}
+          {/* wrap so the parent's space-y doesn't add a stray margin to base-ui
+              Select's hidden form input (which otherwise mis-aligns the labels) */}
+          <div>
+            <ModelSelect value={model} onChange={setModel} includeAuto disabled={running} />
           </div>
         </div>
-
-        <Button onClick={runTest} disabled={running} className="mb-0.5">
-          {running ? "Running..." : "Run test"}
-        </Button>
-
-        {tasks.length > 0 && !running && (
-          <Button
-            variant="ghost"
-            onClick={() => setTasks([])}
-            className="mb-0.5"
-          >
-            Clear
-          </Button>
+        <Button onClick={runTest} disabled={running}>{running ? "Running..." : "Run test"}</Button>
+        {runs.length > 0 && !running && (
+          <Button variant="outline" onClick={() => setRuns([])}>Clear history</Button>
         )}
       </div>
 
-      <Separator />
-
-      {/* Summary stats */}
-      {tasks.length > 0 && (
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: "Total",     value: tasks.length },
-            { label: "Streaming", value: streaming,
-              className: streaming > 0 ? "text-yellow-600" : "" },
-            { label: "Done",      value: done,
-              className: done > 0 ? "text-green-600" : "" },
-            { label: "Avg time",
-              value: done > 0 ? `${(avgElapsed / 1000).toFixed(1)}s` : "—" },
-          ].map(stat => (
-            <Card key={stat.label}>
-              <CardContent className="pt-4 pb-3">
-                <p className="text-xs text-muted-foreground">{stat.label}</p>
-                <p className={`text-2xl font-bold tabular-nums ${stat.className ?? ""}`}>
-                  {stat.value}
-                </p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {/* Task table */}
-      {tasks.length > 0 && (
+      {runs.length === 0 && (
         <Card>
-          <CardHeader className="pb-2">
-            <div className="grid grid-cols-5 gap-2 text-xs text-muted-foreground font-medium">
-              <span>Task ID</span>
-              <span>Model</span>
-              <span>Status</span>
-              <span className="text-right">Tokens</span>
-              <span className="text-right">Elapsed</span>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0 max-h-80 overflow-y-auto">
-            {tasks.map(task => (
-              <TaskRow key={task.id} task={task} />
-            ))}
+          <CardContent className="flex flex-col items-center gap-2 py-8 text-center text-sm italic text-muted-foreground">
+            <Lightning className="size-6 not-italic" />
+            <p className="max-w-sm">
+              Set the number of concurrent requests and hit Run test. Each run is logged below with
+              per-request duration and throughput (completions stream over a single connection).
+            </p>
           </CardContent>
         </Card>
       )}
 
-      {tasks.length === 0 && !running && (
-        <p className="text-sm text-muted-foreground italic text-center py-8">
-          Set the number of concurrent requests and hit Run test.
-          Watch the Worker Status tab to see the queue build and drain.
-        </p>
-      )}
+      <div className="space-y-4">
+        {runs.map(run => <RunCard key={run.id} run={run} />)}
+      </div>
     </div>
   )
 }

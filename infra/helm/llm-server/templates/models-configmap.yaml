@@ -1,0 +1,11 @@
+# The registry itself, shipped as a ConfigMap so the API / workers read the same
+# single source of truth at runtime (mounted at /config/models.json).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-models
+  labels:
+    {{- include "llm-server.labels" . | nindent 4 }}
+data:
+  models.json: |-
+{{ .Files.Get "files/models.json" | indent 4 }}

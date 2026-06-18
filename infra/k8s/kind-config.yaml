@@ -3,15 +3,8 @@ apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
   - role: control-plane
     extraPortMappings:
-      - containerPort: 30000   # api
-        hostPort: 30000
-        protocol: TCP
-      - containerPort: 30001   # dashboard
-        hostPort: 30001
-        protocol: TCP
-      - containerPort: 30002   # llm-135m
-        hostPort: 30002
-        protocol: TCP
-      - containerPort: 30003   # llm-360m
-        hostPort: 30003
+      # Reverse proxy is the ONLY exposed entrypoint. Dashboard at /,
+      # API at /api/. All other services are ClusterIP-internal.
+      - containerPort: 30080   # proxy
+        hostPort: 30080
         protocol: TCP

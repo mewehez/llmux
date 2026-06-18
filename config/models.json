@@ -1,0 +1,75 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the model set. Drives the app (API/worker/dashboard) AND the Helm chart (infra/helm/llm-server) that generates per-model k8s resources. Add a model = add an entry here, then ./infra/scripts/deploy-k8s.sh. Set enabled:false to stop serving a model (Helm prunes its resources, the API drops it from /config + scaling). stream / consumer_group / llm_url are DERIVED from id (llm:work:{id}, llm-workers-{id}, http://llm-{id}:8080). model_url is where the GGUF is fetched into the model PVC on first boot. SLOT invariant: keep max_replicas*worker_concurrency <= max_llm_pods*parallel so workers never oversubscribe llama.cpp slots. CPU invariant: keep llm_args.threads == resources.llm.requests.cpu so the k8s scheduler enforces the node's core budget — a pod won't schedule unless that many cores are free, which is what stops two models' KEDA ceilings from oversubscribing CPU. Reserve ~1/4 of physical cores for OS/k8s/redis/workers (don't size the sum of all maxes to 100% of cores).",
+  "models": [
+    {
+      "id": "135m",
+      "label": "SmolLM2-135M",
+      "enabled": true,
+      "runner": "llamacpp",
+      "model_file": "SmolLM2-135M-Instruct-Q4_K_M.gguf",
+      "model_url": "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf",
+      "llm_args": { "ctx_size": 2048, "threads": 4, "parallel": 4, "threads_http": 8 },
+      "worker_concurrency": 2,
+      "max_replicas": 3,
+      "max_llm_pods": 2,
+      "pvc_size": "500Mi",
+      "resources": {
+        "llm":    { "requests": { "cpu": "1",   "memory": "512Mi" }, "limits": { "cpu": "4", "memory": "1Gi" } },
+        "worker": { "requests": { "cpu": "50m", "memory": "64Mi" },  "limits": { "cpu": "1", "memory": "192Mi" } }
+      }
+    },
+    {
+      "id": "360m",
+      "label": "SmolLM2-360M",
+      "enabled": true,
+      "runner": "llamacpp",
+      "model_file": "SmolLM2-360M-Instruct-Q4_K_M.gguf",
+      "model_url": "https://huggingface.co/bartowski/SmolLM2-360M-Instruct-GGUF/resolve/main/SmolLM2-360M-Instruct-Q4_K_M.gguf",
+      "llm_args": { "ctx_size": 2048, "threads": 4, "parallel": 4, "threads_http": 8 },
+      "worker_concurrency": 2,
+      "max_replicas": 2,
+      "max_llm_pods": 2,
+      "pvc_size": "500Mi",
+      "resources": {
+        "llm":    { "requests": { "cpu": "1",   "memory": "640Mi" }, "limits": { "cpu": "4", "memory": "1Gi" } },
+        "worker": { "requests": { "cpu": "50m", "memory": "64Mi" },  "limits": { "cpu": "1", "memory": "192Mi" } }
+      }
+    },
+    {
+      "_role": "ingestion / summary — planned for the 128GB / 32-core prod server (CPU-only). enabled:false until then. 32-core profile: threads 4 == cpu request 4 (honest request → scheduler enforces the core budget). Recommended steady-state ~2 replicas (8 cores) alongside 2x qwen3-32b; KEDA ceiling 4.",
+      "id": "qwen3-8b",
+      "label": "Qwen3-8B",
+      "enabled": false,
+      "runner": "llamacpp",
+      "model_file": "Qwen_Qwen3-8B-Q5_K_M.gguf",
+      "model_url": "https://huggingface.co/bartowski/Qwen_Qwen3-8B-GGUF/resolve/main/Qwen_Qwen3-8B-Q5_K_M.gguf",
+      "llm_args": { "ctx_size": 8192, "threads": 4, "parallel": 4, "threads_http": 8 },
+      "worker_concurrency": 4,
+      "max_replicas": 4,
+      "max_llm_pods": 4,
+      "pvc_size": "8Gi",
+      "resources": {
+        "llm":    { "requests": { "cpu": "4",   "memory": "8Gi" },  "limits": { "cpu": "5", "memory": "10Gi" } },
+        "worker": { "requests": { "cpu": "50m", "memory": "64Mi" }, "limits": { "cpu": "1", "memory": "192Mi" } }
+      }
+    },
+    {
+      "_role": "orchestrator / analysis — planned for the 128GB / 32-core prod server (CPU-only). enabled:false until then. ~23GB GGUF (Q5_K_M). 32-core profile: threads 8 == cpu request 8 (honest request → scheduler enforces the core budget). Recommended steady-state ~2 replicas (16 cores) alongside 2x qwen3-8b = 24 cores, leaving ~8 for OS/k8s/redis/workers; KEDA ceiling 3.",
+      "id": "qwen3-32b",
+      "label": "Qwen3-32B",
+      "enabled": false,
+      "runner": "llamacpp",
+      "model_file": "Qwen_Qwen3-32B-Q5_K_M.gguf",
+      "model_url": "https://huggingface.co/bartowski/Qwen_Qwen3-32B-GGUF/resolve/main/Qwen_Qwen3-32B-Q5_K_M.gguf",
+      "llm_args": { "ctx_size": 8192, "threads": 8, "parallel": 2, "threads_http": 6 },
+      "worker_concurrency": 2,
+      "max_replicas": 3,
+      "max_llm_pods": 3,
+      "pvc_size": "30Gi",
+      "resources": {
+        "llm":    { "requests": { "cpu": "8",   "memory": "24Gi" }, "limits": { "cpu": "10", "memory": "28Gi" } },
+        "worker": { "requests": { "cpu": "50m", "memory": "64Mi" }, "limits": { "cpu": "1",  "memory": "192Mi" } }
+      }
+    }
+  ]
+}
