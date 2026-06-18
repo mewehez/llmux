@@ -28,6 +28,19 @@ project review.
 
 - [ ] **Stand up the 128 GB Qwen deployment** — flip `enabled: true` on
       `qwen3-8b` / `qwen3-32b` and validate the sized profile on the real box.
+- [ ] **Speculative decoding (multi-token) — benchmark it, don't reinvent it.**
+      Decoding lives in the backend (llama.cpp / vLLM), one layer below llmux, so
+      the project's role is to *expose, benchmark, and observe* it — not implement
+      the decode loop.
+  - Add an optional `draft_model` (+ draft args) to `config/models.json`; the
+    compose generator / Helm chart download the second GGUF and pass
+    `--model-draft` to `llama-server`.
+  - Add a "speculative on/off" dimension to the benchmark panel and surface the
+    **draft acceptance rate** + tokens-per-forward-pass in telemetry.
+  - Sweet spot is **Qwen3-32B** with a small same-family draft (Qwen3-0.6B/1.7B):
+    big target + tiny aligned draft = high acceptance. Skip the SmolLM2 dev models
+    (too small to benefit) and native MTP-head models (EAGLE/Medusa/DeepSeek-V3)
+    unless one is later added. Tie this to the Qwen deploy above.
 - [ ] **Prometheus + Grafana** — the deliberately-deferred observability upgrade
       (current telemetry is Redis-native).
 - [ ] **API auth + rate limiting** — the API is currently open; real serving
