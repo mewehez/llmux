@@ -25,17 +25,7 @@
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  B["Browser<br/>React dashboard"] -->|"POST /chat · GET /sse"| API["FastAPI API"]
-  API -->|"XADD work"| RS[("Redis<br/>Streams")]
-  RS -->|"XREADGROUP"| W["Workers<br/>(per model)"]
-  W -->|"/v1/chat/completions"| LLM["llama.cpp<br/>servers"]
-  W -->|"tokens: XADD + PUBLISH"| RS
-  RS -->|"replay + pub/sub"| API -->|"SSE tokens"| B
-  KEDA(["KEDA"]) -. "scale on lag" .-> W
-  KEDA -. "scale on lag" .-> LLM
-```
+![Architecture — abstract view](docs/diagrams/01-system-abstract.png)
 
 Late SSE clients **replay** missed tokens from a per-task stream, while live clients get push via **pub/sub** — the dual mechanism means no token is lost on a slow or reconnecting browser. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed diagram, [docs/scaling-theory.md](docs/scaling-theory.md) for the replica/parallelism math, and [`docs/diagrams/`](docs/diagrams/) for the Excalidraw deep-dives.
 
