@@ -35,7 +35,7 @@ flowchart LR
   KEDA -. "scale on lag" .-> LLM
 ```
 
-Late SSE clients **replay** missed tokens from a per-task stream, while live clients get push via **pub/sub** — the dual mechanism means no token is lost on a slow or reconnecting browser. See [ARCHITECTURE.md](ARCHITECTURE.md) for the detailed diagram, [scaling-theory.md](scaling-theory.md) for the replica/parallelism math, and [`diagrams/`](diagrams/) for the Excalidraw deep-dives.
+Late SSE clients **replay** missed tokens from a per-task stream, while live clients get push via **pub/sub** — the dual mechanism means no token is lost on a slow or reconnecting browser. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed diagram, [docs/scaling-theory.md](docs/scaling-theory.md) for the replica/parallelism math, and [`docs/diagrams/`](docs/diagrams/) for the Excalidraw deep-dives.
 
 ## Quickstart (Docker Compose)
 
@@ -92,8 +92,7 @@ make generate          # rebuild docker-compose.yml + sync the Helm registry cop
 
 ## Dashboard
 
-<!-- Add a screenshot or GIF: save it to docs/dashboard.png and uncomment the line below. -->
-<!-- ![llmux dashboard](docs/dashboard.png) -->
+![llmux dashboard — live load test](docs/dashboard.gif)
 
 A React + shadcn/ui dashboard with tabs for **Overview** (live queue depth, slots, replicas), **Chat** (SSE streaming), **Load Tester**, **Benchmark** (per-runner), **Activity** (the `llm:events` feed), and **Metrics** (real percentiles). Data is honest: `live` / `offline` states, never silent mock data.
 
@@ -107,7 +106,7 @@ config/         models.json — the single source of truth (registry)
 infra/helm/     registry-driven Helm chart
 infra/k8s/      kind cluster config
 infra/scripts/  deploy / stop scripts · docker-compose generator
-diagrams/       Excalidraw architecture diagrams
+docs/           ARCHITECTURE.md · scaling-theory.md · Excalidraw diagrams
 ```
 
 ## Development & testing
