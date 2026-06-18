@@ -16,8 +16,11 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "fakeredis>=2.36.0",
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
